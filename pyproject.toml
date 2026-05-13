@@ -1,0 +1,31 @@
+[project]
+name = "bookvoice-studio"
+version = "0.1.0"
+description = "BookVoice Studio 书声工坊：本地电子书转有声书工具"
+authors = [
+    {name = "hanxi", email = "im.hanxi@gmail.com"},
+]
+dependencies = [
+    "edge-tts>=6.1.9",
+    "ebooklib>=0.18.0",
+    "beautifulsoup4>=4.12.2",
+    "py-spy>=0.4.1",
+    "mutagen>=1.47.0",
+    "imageio-ffmpeg>=0.6.0",
+]
+requires-python = ">=3.12"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.scripts]
+start = "python -m bookvoice.main"
+gui = "python -m bookvoice.gui"
+build-windows = "python tools/build_windows_exe.py"

@@ -1,0 +1,3 @@
+from .branding import PRODUCT_NAME, PRODUCT_NAME_CN, PROJECT_SLUG
+
+__all__ = ["PRODUCT_NAME", "PRODUCT_NAME_CN", "PROJECT_SLUG"]

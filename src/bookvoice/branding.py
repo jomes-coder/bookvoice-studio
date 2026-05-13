@@ -1,0 +1,8 @@
+PRODUCT_NAME = "BookVoice Studio"
+PRODUCT_NAME_CN = "书声工坊"
+PROJECT_SLUG = "bookvoice-studio"
+APP_STATE_DIR_NAME = "BookVoiceStudio"
+DIST_APP_NAME = "BookVoiceStudio"
+LEGACY_PROJECT_NAME = "epub2mp3"
+WINDOW_TITLE = f"{PRODUCT_NAME} - {PRODUCT_NAME_CN}"
+HEADER_TITLE = f"{PRODUCT_NAME_CN} 有声书制作"
