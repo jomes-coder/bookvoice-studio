@@ -22,6 +22,7 @@ from bookvoice.gui import (
     QUEUE_BUTTON_COLUMNS,
     QUEUE_BUTTON_TEXTS,
     QUEUE_TREE_COLUMNS,
+    PreviewLoadController,
     SECONDARY_BUTTON_PADDING,
     chapter_row_values,
     format_chapter_title_for_preview,
@@ -217,6 +218,16 @@ class GuiLayoutTests(unittest.TestCase):
             queue_display_rows(queue),
             [(1, "待转换", "a.epub", "D:\\books\\a.epub")],
         )
+
+    def test_preview_load_controller_accepts_only_latest_request(self):
+        controller = PreviewLoadController()
+
+        first = controller.next_request("D:\\books\\old.epub")
+        second = controller.next_request("D:\\books\\new.epub")
+
+        self.assertFalse(controller.is_current(first))
+        self.assertTrue(controller.is_current(second))
+        self.assertEqual(second.path, "D:\\books\\new.epub")
 
 
 if __name__ == "__main__":

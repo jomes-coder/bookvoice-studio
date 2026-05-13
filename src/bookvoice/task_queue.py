@@ -1,4 +1,9 @@
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from .onboarding import default_state_dir
 
 
 PENDING = "pending"
@@ -7,6 +12,7 @@ COMPLETED = "completed"
 FAILED = "failed"
 CANCELED = "canceled"
 STATUSES = (PENDING, RUNNING, COMPLETED, FAILED, CANCELED)
+TASK_QUEUE_FILENAME = "task_queue.json"
 
 
 @dataclass
@@ -70,8 +76,61 @@ class TaskQueue:
                 counts[item.status] += 1
         return counts
 
+    def to_records(self) -> list[dict[str, str]]:
+        return [asdict(item) for item in self.items]
+
+    @classmethod
+    def from_records(
+        cls,
+        records: list[dict[str, Any]],
+        *,
+        resume_interrupted: bool = True,
+    ) -> "TaskQueue":
+        queue = cls()
+        seen: set[str] = set()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            path = record.get("path")
+            if not isinstance(path, str) or not path.strip() or path in seen:
+                continue
+            status = record.get("status")
+            if status not in STATUSES:
+                status = PENDING
+            if resume_interrupted and status == RUNNING:
+                status = PENDING
+            queue.items.append(QueueItem(path=path, status=status))
+            seen.add(path)
+        return queue
+
     def _mark(self, path: str, status: str) -> None:
         for item in self.items:
             if item.path == path:
                 item.status = status
                 return
+
+
+def task_queue_state_path(state_dir: Path | None = None) -> Path:
+    return (state_dir or default_state_dir()) / TASK_QUEUE_FILENAME
+
+
+def load_task_queue(state_dir: Path | None = None) -> TaskQueue:
+    path = task_queue_state_path(state_dir)
+    if not path.exists():
+        return TaskQueue()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return TaskQueue()
+    if not isinstance(data, list):
+        return TaskQueue()
+    return TaskQueue.from_records(data)
+
+
+def save_task_queue(queue: TaskQueue, state_dir: Path | None = None) -> None:
+    path = task_queue_state_path(state_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(queue.to_records(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )

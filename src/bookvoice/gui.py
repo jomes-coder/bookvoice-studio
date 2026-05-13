@@ -59,7 +59,16 @@ from .onboarding import (
     should_show_startup_guide,
 )
 from .run_log import DailyLogWriter
-from .task_queue import CANCELED, COMPLETED, FAILED, PENDING, RUNNING, TaskQueue
+from .task_queue import (
+    CANCELED,
+    COMPLETED,
+    FAILED,
+    PENDING,
+    RUNNING,
+    TaskQueue,
+    load_task_queue,
+    save_task_queue,
+)
 from .voices import (
     COMMON_VOICES,
     fetch_edge_tts_voice_names,
@@ -267,6 +276,24 @@ class PauseChange:
     log_message: str
 
 
+@dataclass(frozen=True)
+class PreviewLoadRequest:
+    request_id: int
+    path: str
+
+
+class PreviewLoadController:
+    def __init__(self) -> None:
+        self._latest_request_id = 0
+
+    def next_request(self, path: str) -> PreviewLoadRequest:
+        self._latest_request_id += 1
+        return PreviewLoadRequest(self._latest_request_id, path)
+
+    def is_current(self, request: PreviewLoadRequest) -> bool:
+        return request.request_id == self._latest_request_id
+
+
 class PauseController:
     pause_text = "暂停"
     resume_text = "继续"
@@ -336,7 +363,8 @@ class BookVoiceStudioApp:
         self.last_failed_count = 0
         self.chapter_selection = ChapterSelection()
         self.preview_chapters = []
-        self.task_queue = TaskQueue()
+        self.task_queue = load_task_queue()
+        self.preview_loader = PreviewLoadController()
         self.saved_settings = load_gui_settings()
 
         self.epub_path_var = tk.StringVar()
@@ -367,6 +395,7 @@ class BookVoiceStudioApp:
         self.queue_status_var = tk.StringVar(value=format_queue_summary(self.task_queue))
 
         self._build_ui()
+        self.refresh_queue_view()
         self.root.protocol("WM_DELETE_WINDOW", self.close_window)
         self.root.after(700, self.show_startup_guide_if_needed)
 
@@ -992,7 +1021,7 @@ class BookVoiceStudioApp:
         )
         if path:
             self.epub_path_var.set(path)
-            self.load_chapter_preview(path)
+            self.load_chapter_preview_async(path)
 
     def browse_output_dir(self) -> None:
         path = filedialog.askdirectory(title="选择输出目录")
@@ -1037,11 +1066,12 @@ class BookVoiceStudioApp:
         if not paths:
             return
         added_count = self.task_queue.add_many(list(paths))
+        self.persist_task_queue()
         self.refresh_queue_view()
         if not self.epub_path_var.get().strip():
             first_path = paths[0]
             self.epub_path_var.set(first_path)
-            self.load_chapter_preview(first_path)
+            self.load_chapter_preview_async(first_path)
         self.append_log(
             f"批量队列已添加 {added_count} 本，当前共 {len(self.task_queue.items)} 本。"
         )
@@ -1051,8 +1081,21 @@ class BookVoiceStudioApp:
             self.append_log("转换运行中，暂不能清空队列。")
             return
         self.task_queue.clear()
+        self.persist_task_queue()
         self.refresh_queue_view()
         self.append_log("批量队列已清空。")
+
+    def persist_task_queue(self) -> None:
+        try:
+            save_task_queue(self.task_queue)
+        except OSError as exc:
+            self.append_log(f"队列状态保存失败: {exc}")
+
+    def persist_task_queue_from_worker(self) -> None:
+        try:
+            save_task_queue(self.task_queue)
+        except OSError as exc:
+            self.thread_safe_log(f"队列状态保存失败: {exc}")
 
     def refresh_queue_view(self) -> None:
         self.queue_tree.delete(*self.queue_tree.get_children())
@@ -1077,13 +1120,47 @@ class BookVoiceStudioApp:
         self.log_text.configure(state="disabled")
 
     def load_chapter_preview(self, path: str) -> None:
+        self.load_chapter_preview_async(path)
+
+    def load_chapter_preview_async(self, path: str) -> None:
+        request = self.preview_loader.next_request(path)
+        calibre_converter = self.ebook_convert_path_var.get().strip() or None
+        self.preview_chapters = []
+        self.chapter_selection.load([])
+        self.chapter_tree.delete(*self.chapter_tree.get_children())
+        self.append_log(f"正在解析章节预览: {Path(path).name}")
+        threading.Thread(
+            target=self._chapter_preview_worker,
+            args=(request, calibre_converter),
+            daemon=True,
+        ).start()
+
+    def _chapter_preview_worker(
+        self,
+        request: PreviewLoadRequest,
+        calibre_converter: str | None,
+    ) -> None:
         try:
             parsed = parse_book(
-                path,
-                calibre_converter=self.ebook_convert_path_var.get().strip() or None,
+                request.path,
+                calibre_converter=calibre_converter,
             )
         except Exception as exc:
-            self.append_log(f"章节预览失败: {exc}")
+            self.root.after(0, self._apply_chapter_preview_error, request, str(exc))
+            return
+        self.root.after(0, self._apply_chapter_preview, request, parsed)
+
+    def _apply_chapter_preview_error(
+        self,
+        request: PreviewLoadRequest,
+        message: str,
+    ) -> None:
+        if not self.preview_loader.is_current(request):
+            return
+        self.append_log(f"章节预览失败: {message}")
+
+    def _apply_chapter_preview(self, request: PreviewLoadRequest, parsed) -> None:
+        if not self.preview_loader.is_current(request):
             return
         self.preview_chapters = parsed.chapters
         self.chapter_selection.load(parsed.chapters)
@@ -1281,6 +1358,7 @@ class BookVoiceStudioApp:
             self.save_current_settings()
         except OSError as exc:
             self.append_log(f"设置保存失败: {exc}")
+        self.persist_task_queue()
         self.root.destroy()
 
     def _positive_int_or_default(self, value: str, default: int) -> int:
@@ -1507,6 +1585,7 @@ class BookVoiceStudioApp:
                     selected_chapter_indexes=None,
                 )
                 self.task_queue.mark_running(path)
+                self.persist_task_queue_from_worker()
                 self.thread_safe_queue_view()
                 self.thread_safe_log(f"队列开始: {Path(path).name}")
 
@@ -1515,6 +1594,7 @@ class BookVoiceStudioApp:
                     for error in validation_errors:
                         self.thread_safe_log(f"队列任务错误: {error}")
                     self.task_queue.mark_failed(path)
+                    self.persist_task_queue_from_worker()
                     self.thread_safe_queue_view()
                     continue
 
@@ -1522,6 +1602,7 @@ class BookVoiceStudioApp:
                     result = self._run_converter(options)
                 except Exception as exc:
                     self.task_queue.mark_failed(path)
+                    self.persist_task_queue_from_worker()
                     self.thread_safe_queue_view()
                     self.thread_safe_log(f"队列任务失败: {Path(path).name}: {exc}")
                     continue
@@ -1537,6 +1618,7 @@ class BookVoiceStudioApp:
 
                 if result.canceled:
                     self.task_queue.mark_canceled(path)
+                    self.persist_task_queue_from_worker()
                     self._mark_pending_queue_items_canceled()
                     self.thread_safe_log(f"队列已取消: {Path(path).name}")
                     break
@@ -1544,6 +1626,7 @@ class BookVoiceStudioApp:
                     self.task_queue.mark_failed(path)
                 else:
                     self.task_queue.mark_completed(path)
+                self.persist_task_queue_from_worker()
                 self.thread_safe_queue_view()
             self.thread_safe_log("批量队列处理结束。")
         except Exception as exc:
@@ -1554,6 +1637,7 @@ class BookVoiceStudioApp:
     def _mark_pending_queue_items_canceled(self) -> None:
         for path in self.task_queue.pending_paths():
             self.task_queue.mark_canceled(path)
+        self.persist_task_queue_from_worker()
         self.thread_safe_queue_view()
 
     def _conversion_finished(self) -> None:
@@ -1574,6 +1658,7 @@ class BookVoiceStudioApp:
             self.retry_button.configure(state="normal")
         else:
             self.retry_button.configure(state="disabled")
+        self.persist_task_queue()
         self.refresh_queue_view()
 
 

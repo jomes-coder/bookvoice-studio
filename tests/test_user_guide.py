@@ -35,6 +35,25 @@ class UserGuideTests(unittest.TestCase):
 
         self.assertIn("[使用说明书](docs/user-guide.md)", readme)
 
+    def test_acceptance_checklist_exists_for_v1_release(self):
+        project_root = Path(__file__).resolve().parents[1]
+        checklist = project_root / "docs" / "release" / "v1_acceptance_checklist.md"
+
+        self.assertTrue(checklist.exists())
+        content = checklist.read_text(encoding="utf-8")
+
+        for expected in [
+            "EPUB",
+            "TXT",
+            "DOCX",
+            "MOBI",
+            "AZW3",
+            "Windows 打包",
+            "M4B",
+            "任务恢复",
+        ]:
+            self.assertIn(expected, content)
+
 
 if __name__ == "__main__":
     unittest.main()
